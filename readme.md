@@ -66,6 +66,8 @@ Before running SubMerge, install the required tools:
 
 ```
 
+## Automatic Installation
+
 ### Install Amass
 
 ```bash
