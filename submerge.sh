@@ -20,7 +20,7 @@ cat << "EOF"
 
         SubMerge - Unified Recon Framework (All subdomain tools)
                     Version 1.1
-                    Author: Umang
+                    Author: Umang Mishra
 
    [!] Legal: Use only on targets you own or have permission to test!
 EOF

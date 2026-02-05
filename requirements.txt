@@ -1,23 +1,13 @@
-# amass
-sudo apt install amass
+amass
 
-# subfinder
-go install -v github.com/projectdiscovery/subfinder/v2/cmd/subfinder@latest
+subfinder
 
-# assetfinder
-go install -v github.com/tomnomnom/assetfinder@latest
+assetfinder
 
-# dnsgen
-pip3 install dnsgen
+dnsgen
 
-# massdns
-git clone https://github.com/blechschmidt/massdns.git
-cd massdns
-make
-sudo cp bin/massdns /usr/local/bin/
+massdns
 
-# httprobe
-go install -v github.com/tomnomnom/httprobe@latest
+httprobe
 
-# Add Go tools to PATH:
 export PATH=$PATH:~/go/bin
