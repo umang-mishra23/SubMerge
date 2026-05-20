@@ -39,7 +39,7 @@ BASE="output/$DOMAIN"
 RAW="$BASE/raw"
 FINAL="$BASE/final"
 
-# ---- CREATE DIRECTORIES (no sudo needed) ----
+# ---- CREATE DIRECTORIES ----
 mkdir -p "$RAW" "$FINAL"
 chmod -R 755 "output"
 
@@ -47,7 +47,7 @@ echo "[+] Target: $DOMAIN"
 echo "[+] Output: $BASE"
 
 # =========================
-# 1) SUBDOMAIN ENUMERATION
+#  SUBDOMAIN ENUMERATION
 # =========================
 
 echo "[+] Running amass..."
@@ -67,7 +67,7 @@ COUNT_INIT=$(wc -l < "$RAW/all_initial.txt")
 echo "[✔] Initial unique subdomains: $COUNT_INIT"
 
 # =========================
-# 2) DNSGEN (LIMITED!)
+# DNSGEN (LIMITED!)
 # =========================
 
 echo "[+] Running dnsgen (SAFE MODE)..."
@@ -86,7 +86,7 @@ COUNT_PERM=$(wc -l < "$RAW/all_with_perms.txt")
 echo "[✔] After dnsgen (limited): $COUNT_PERM"
 
 # =========================
-# 3) MASSDNS (CHUNKED)
+# MASSDNS (CHUNKED)
 # =========================
 
 echo "[+] Running massdns (chunked)..."
@@ -108,7 +108,7 @@ done
 rm "$RAW"/chunk_*
 
 # =========================
-# 4) EXTRACT VALID A RECORDS
+# EXTRACT VALID A RECORDS
 # =========================
 
 grep " A " "$RAW/massdns.txt" \
@@ -120,7 +120,7 @@ COUNT_RES=$(wc -l < "$FINAL/resolved.txt")
 echo "[✔] Resolved subdomains: $COUNT_RES"
 
 # =========================
-# 5) ALIVE CHECK
+# ALIVE CHECK
 # =========================
 
 echo "[+] Running httprobe..."
