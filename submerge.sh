@@ -1,136 +1,211 @@
-#!/bin/bash
-set -euo pipefail   # <-- stops silent failures
+#!/usr/bin/env bash
+set -Eeuo pipefail
+IFS=$'\n\t'
+shopt -s nullglob
 
 # =========================
-# SubMerge - Real Recon Tool
+# SubMerge - Refined Recon Tool
 # Author: Umang Mishra
-# Version: 1.1
-# Legal: Authorized testing only
+# Version: 1.3
+# Legal: Use only on targets you own or have permission to test.
 # =========================
+
+SCRIPT_NAME="$(basename "$0")"
+
+DOMAIN="${1:-}"
+OUTPUT_ROOT="${OUTPUT_ROOT:-output}"
+RESOLVERS_FILE="${RESOLVERS_FILE:-resolvers.txt}"
+CHUNK_SIZE="${CHUNK_SIZE:-500000}"
+DNSGEN_LIMIT="${DNSGEN_LIMIT:-200000}"
+KEEP_TEMP="${KEEP_TEMP:-0}"
 
 print_banner() {
-cat << "EOF"
+cat <<'EOF'
 
    ███████╗██╗   ██╗██████╗ ███╗   ███╗███████╗██████╗  ██████╗ ███████╗
    ██╔════╝██║   ██║██╔══██╗████╗ ████║██╔════╝██╔══██╗██╔════╝ ██╔════╝
-   ███████╗██║   ██║██████╔╝██║████╔██║█████╗  ██████╔╝██║  ███╗█████╗  
-   ╚════██║██║   ██║██╔══██╗██║╚██╔╝██║██╔══╝  ██╔══██╗██║   ██║██╔══╝  
+   ███████╗██║   ██║██████╔╝██║████╔██║█████╗  ██████╔╝██║  ███╗█████╗
+   ╚════██║██║   ██║██╔══██╗██║╚██╔╝██║██╔══╝  ██╔══██╗██║   ██║██╔══╝
    ███████║╚██████╔╝██████╔╝██║ ╚═╝ ██║███████╗██║  ██║╚██████╔╝███████╗
    ╚══════╝ ╚═════╝ ╚═════╝ ╚═╝     ╚═╝╚══════╝╚═╝  ╚═╝ ╚═════╝ ╚══════╝
 
-        SubMerge - Unified Recon Framework (All subdomain tools)
-                    Version 1.1
-                    Author: Umang Mishra
+        SubMerge - Unified Recon Framework
+                  Version 1.3
+                  Author: Umang Mishra
 
    [!] Legal: Use only on targets you own or have permission to test!
 EOF
 }
 
-if [ -z "${1:-}" ]; then
+usage() {
+  cat <<EOF
+Usage: $SCRIPT_NAME example.com
+
+Environment variables:
+  OUTPUT_ROOT=output
+  RESOLVERS_FILE=resolvers.txt
+  CHUNK_SIZE=500000
+  DNSGEN_LIMIT=200000
+  KEEP_TEMP=0
+EOF
+}
+
+log()  { printf '[*] %s\n' "$*"; }
+ok()   { printf '[+] %s\n' "$*"; }
+warn() { printf '[!] %s\n' "$*" >&2; }
+die()  { printf '[x] %s\n' "$*" >&2; exit 1; }
+
+require_cmds() {
+  local missing=()
+  local cmds=(amass subfinder assetfinder findomain dnsgen massdns httpx sort awk sed wc head split cat grep)
+
+  for c in "${cmds[@]}"; do
+    command -v "$c" >/dev/null 2>&1 || missing+=("$c")
+  done
+
+  if ((${#missing[@]} > 0)); then
+    die "Missing required tools: ${missing[*]}"
+  fi
+}
+
+validate_domain() {
+  [[ -n "$DOMAIN" ]] || { usage; exit 1; }
+  [[ "$DOMAIN" =~ ^([A-Za-z0-9-]+\.)+[A-Za-z]{2,}$ ]] || die "Invalid domain: $DOMAIN"
+}
+
+cleanup() {
+  if [[ "$KEEP_TEMP" -eq 0 && -n "${RAW:-}" ]]; then
+    rm -f "$RAW"/chunk_* 2>/dev/null || true
+  fi
+}
+
+trap cleanup EXIT
+
+main() {
   print_banner
-  echo "Usage: ./submerge.sh example.com"
-  exit 1
-fi
+  validate_domain
+  require_cmds
 
-print_banner
+  BASE="$OUTPUT_ROOT/$DOMAIN"
+  RAW="$BASE/raw"
+  FINAL="$BASE/final"
 
-DOMAIN="$1"
-BASE="output/$DOMAIN"
-RAW="$BASE/raw"
-FINAL="$BASE/final"
+  mkdir -p "$RAW" "$FINAL"
+  chmod -R 755 "$OUTPUT_ROOT" || true
 
-# ---- CREATE DIRECTORIES ----
-mkdir -p "$RAW" "$FINAL"
-chmod -R 755 "output"
+  log "Target: $DOMAIN"
+  log "Output: $BASE"
 
-echo "[+] Target: $DOMAIN"
-echo "[+] Output: $BASE"
+  : > "$RAW/amass.txt"
+  : > "$RAW/subfinder.txt"
+  : > "$RAW/assetfinder.txt"
+  : > "$RAW/findomain.txt"
+  : > "$RAW/massdns.txt"
+  : > "$FINAL/resolved.txt"
+  : > "$FINAL/alive.txt"
 
-# =========================
-#  SUBDOMAIN ENUMERATION
-# =========================
+  pids=()
 
-echo "[+] Running amass..."
-amass enum -passive -d "$DOMAIN" -o "$RAW/amass.txt"
+  log "amass..."
+  amass enum -passive -d "$DOMAIN" -o "$RAW/amass.txt" &
+  pids+=($!)
 
-echo "[+] Running subfinder..."
-subfinder -d "$DOMAIN" -silent -o "$RAW/subfinder.txt"
+  log "subfinder..."
+  subfinder -d "$DOMAIN" -silent -o "$RAW/subfinder.txt" &
+  pids+=($!)
 
-echo "[+] Running assetfinder..."
-assetfinder --subs-only "$DOMAIN" > "$RAW/assetfinder.txt"
+  log "assetfinder..."
+  { assetfinder --subs-only "$DOMAIN" > "$RAW/assetfinder.txt"; } &
+  pids+=($!)
 
-# Merge initial results
-cat "$RAW"/amass.txt "$RAW"/subfinder.txt "$RAW"/assetfinder.txt \
-  | sort -u > "$RAW/all_initial.txt"
+  log "findomain..."
+  { findomain -t "$DOMAIN" -q > "$RAW/findomain.txt"; } &
+  pids+=($!)
 
-COUNT_INIT=$(wc -l < "$RAW/all_initial.txt")
-echo "[✔] Initial unique subdomains: $COUNT_INIT"
+  failed=0
+  for pid in "${pids[@]}"; do
+    if ! wait "$pid"; then
+      failed=1
+      warn "One enumeration job failed"
+    fi
+  done
 
-# =========================
-# DNSGEN (LIMITED!)
-# =========================
+  if [[ "$failed" -eq 1 ]]; then
+    warn "Continuing with whatever output was collected"
+  fi
 
-echo "[+] Running dnsgen (SAFE MODE)..."
+  cat "$RAW"/amass.txt \
+      "$RAW"/subfinder.txt \
+      "$RAW"/assetfinder.txt \
+      "$RAW"/findomain.txt 2>/dev/null \
+    | sed 's/\r$//' \
+    | awk 'NF' \
+    | sort -u > "$RAW/all_initial.txt"
 
-# LIMIT permutations to avoid explosion
-dnsgen "$RAW/all_initial.txt" \
-  | sort -u \
-  | head -n 200000 \
-  > "$RAW/dnsgen.txt"
+  COUNT_INIT="$(wc -l < "$RAW/all_initial.txt" | tr -d ' ')"
+  ok "Initial unique subdomains: $COUNT_INIT"
 
-# Merge originals + limited permutations
-cat "$RAW/all_initial.txt" "$RAW/dnsgen.txt" \
-  | sort -u > "$RAW/all_with_perms.txt"
+  if [[ -s "$RAW/all_initial.txt" ]]; then
+    log "Running dnsgen (limited)..."
+    dnsgen "$RAW/all_initial.txt" \
+      | sed 's/\r$//' \
+      | awk 'NF' \
+      | sort -u \
+      | head -n "$DNSGEN_LIMIT" > "$RAW/dnsgen.txt"
 
-COUNT_PERM=$(wc -l < "$RAW/all_with_perms.txt")
-echo "[✔] After dnsgen (limited): $COUNT_PERM"
+    cat "$RAW/all_initial.txt" "$RAW/dnsgen.txt" \
+      | sed 's/\r$//' \
+      | awk 'NF' \
+      | sort -u > "$RAW/all_with_perms.txt"
+  else
+    : > "$RAW/all_with_perms.txt"
+    warn "No initial subdomains found; skipping dnsgen"
+  fi
 
-# =========================
-# MASSDNS (CHUNKED)
-# =========================
+  COUNT_PERM="$(wc -l < "$RAW/all_with_perms.txt" | tr -d ' ')"
+  ok "After dnsgen (limited): $COUNT_PERM"
 
-echo "[+] Running massdns (chunked)..."
+  if [[ ! -s "$RAW/all_with_perms.txt" ]]; then
+    die "No domains to resolve."
+  fi
 
-if [ ! -s "$RAW/all_with_perms.txt" ]; then
-  echo "[!] ERROR: No domains to resolve. Exiting."
-  exit 1
-fi
+  [[ -f "$RESOLVERS_FILE" && -s "$RESOLVERS_FILE" ]] || die "Resolvers file not found or empty: $RESOLVERS_FILE"
 
-> "$RAW/massdns.txt"
+  log "Running massdns (chunked)..."
+  split -l "$CHUNK_SIZE" "$RAW/all_with_perms.txt" "$RAW/chunk_"
 
-# Split into safe chunks
-split -l 500000 "$RAW/all_with_perms.txt" "$RAW/chunk_"
+  > "$RAW/massdns.txt"
+  for chunk in "$RAW"/chunk_*; do
+    [[ -s "$chunk" ]] || continue
+    massdns -r "$RESOLVERS_FILE" -t A -o S "$chunk" >> "$RAW/massdns.txt" || warn "massdns failed for $chunk"
+  done
 
-for chunk in "$RAW"/chunk_*; do
-  massdns -r resolvers.txt -t A -o S "$chunk" >> "$RAW/massdns.txt"
-done
+  if [[ "$KEEP_TEMP" -eq 0 ]]; then
+    rm -f "$RAW"/chunk_* 2>/dev/null || true
+  fi
 
-rm "$RAW"/chunk_*
+  awk '$2=="A" { gsub(/\.$/, "", $1); print $1 }' "$RAW/massdns.txt" \
+    | sort -u > "$FINAL/resolved.txt"
 
-# =========================
-# EXTRACT VALID A RECORDS
-# =========================
+  COUNT_RES="$(wc -l < "$FINAL/resolved.txt" | tr -d ' ')"
+  ok "Resolved subdomains: $COUNT_RES"
 
-grep " A " "$RAW/massdns.txt" \
- | awk '{print $1}' \
- | sed 's/\.$//' \
- | sort -u > "$FINAL/resolved.txt"
+  if [[ -s "$FINAL/resolved.txt" ]]; then
+    log "Running httpx..."
+    httpx -silent \
+      -l "$FINAL/resolved.txt" \
+      -status-code \
+      > "$FINAL/alive.txt" || warn "httpx returned an error"
+  fi
 
-COUNT_RES=$(wc -l < "$FINAL/resolved.txt")
-echo "[✔] Resolved subdomains: $COUNT_RES"
+  COUNT_ALIVE="$(wc -l < "$FINAL/alive.txt" | tr -d ' ')"
 
-# =========================
-# ALIVE CHECK
-# =========================
+  echo "======================================"
+  ok "Total Resolved: $COUNT_RES"
+  ok "Alive Hosts:    $COUNT_ALIVE"
+  ok "Resolved File:   $FINAL/resolved.txt"
+  ok "Alive File:      $FINAL/alive.txt"
+  echo "======================================"
+}
 
-echo "[+] Running httprobe..."
-cat "$FINAL/resolved.txt" | httprobe > "$FINAL/alive.txt"
-
-COUNT_ALIVE=$(wc -l < "$FINAL/alive.txt")
-
-echo "======================================"
-echo "[✔] Total Resolved: $COUNT_RES"
-echo "[✔] Alive Hosts:    $COUNT_ALIVE"
-echo "[✔] Resolved File:  $FINAL/resolved.txt"
-echo "[✔] Alive File:     $FINAL/alive.txt"
-echo "======================================"
+main "$@"
