@@ -1,149 +1,199 @@
-# 🔱 **SubMerge – Unified Subdomain Recon Framework (v1.0)**
+# 🔱 SubMerge – Unified Subdomain Recon Framework (v1.3)
 
-**Author:** Umang Mishra
-**Version:** 1.0
-**License:** For authorized security testing only
+> Automated subdomain reconnaissance framework for bug bounty hunters, penetration testers, and cybersecurity students.
 
 ---
 
-## 🚀 About SubMerge
+## 🚀 Features
 
-**SubMerge** is an automated subdomain reconnaissance tool for Kali Linux that combines multiple popular recon tools into a single pipeline.
-
-It performs:
-
-1. **Passive subdomain enumeration**
-
-   * `amass`
-   * `subfinder`
-   * `assetfinder`
-
-2. **Permutation generation**
-
-   * `dnsgen` (with safe limits)
-
-3. **DNS validation**
-
-   * `massdns` (chunked execution)
-
-4. **Alive host detection**
-
-   * `httprobe`
-
-This tool is designed for **bug bounty hunters, penetration testers, and security students** who want a structured and automated recon workflow.
+- Passive subdomain enumeration
+- Parallel execution for faster recon
+- Subdomain permutation generation
+- DNS validation using MassDNS
+- Live host detection with status codes
+- Organized output structure
+- Lightweight and fast
+- Beginner-friendly workflow
 
 ---
 
-## ⚠️ Legal Disclaimer
+## 🛠 Tools Used
 
-> **Use this tool ONLY on assets you own or have explicit permission to test.
-> Unauthorized scanning is illegal. The author is not responsible for misuse.**
+SubMerge combines the power of multiple reconnaissance tools:
+
+- Amass
+- Subfinder
+- Assetfinder
+- Findomain
+- dnsgen
+- MassDNS
+- HTTPX
+
+---
+
+## ⚡ Recon Workflow
+
+```text
+Passive Enumeration
+        ↓
+Merge Results
+        ↓
+Permutation Generation
+        ↓
+DNS Resolution
+        ↓
+HTTPX Live Detection
+        ↓
+Final Results
+```
 
 ---
 
 ## 📁 Project Structure
 
-```
+```text
 SubMerge/
-│── readme.md
+│── README.md
 │── submerge.sh
-│── resolvers.txt
 │── install.sh
+│── resolvers.txt
 └── output/
 ```
 
 ---
 
-## ✅ Requirements (Install Dependencies)
+## ⚠️ Legal Disclaimer
 
-Before running SubMerge, install the required tools:
+> Use this tool ONLY on assets you own or have explicit permission to test.
+>
+> Unauthorized scanning is illegal.
+>
+> The author is not responsible for misuse.
 
-## Automatic Installation
-```bash
-1. cd submerge
-2. chmod +x install.sh
-3. ./install.sh
+---
 
-```
+# ⚙️ Installation
 
-## Manual Installation
-
-### Install Amass
+## 1️⃣ Clone Repository
 
 ```bash
-sudo apt install amass
-sudo amass db -update
+git clone https://github.com/your-username/SubMerge.git
+
+cd SubMerge
 ```
 
-### Install Subfinder
+---
+
+## 2️⃣ Make Scripts Executable
+
+```bash
+chmod +x install.sh
+chmod +x submerge.sh
+```
+
+---
+
+## 3️⃣ Run Automatic Installer
+
+```bash
+./install.sh
+```
+
+---
+
+# 🔧 Manual Installation
+
+## Install Amass
+
+```bash
+sudo apt install -y amass
+```
+
+---
+
+## Install Subfinder
 
 ```bash
 go install -v github.com/projectdiscovery/subfinder/v2/cmd/subfinder@latest
 ```
 
-### Install Assetfinder
+---
+
+## Install Assetfinder
 
 ```bash
 go install -v github.com/tomnomnom/assetfinder@latest
 ```
 
-### Install dnsgen
+---
+
+## Install Findomain
 
 ```bash
-pip3 install dnsgen
+cargo install findomain
 ```
 
-### Install MassDNS
+---
+
+## Install HTTPX
+
+```bash
+go install -v github.com/projectdiscovery/httpx/cmd/httpx@latest
+```
+
+---
+
+## Install dnsgen
+
+```bash
+sudo apt install -y pipx
+
+pipx install dnsgen
+```
+
+---
+
+## Install MassDNS
 
 ```bash
 git clone https://github.com/blechschmidt/massdns.git
+
 cd massdns
+
 make
+
 sudo cp bin/massdns /usr/local/bin/
 ```
 
-### Install httprobe
+---
+
+## Add Go To PATH
 
 ```bash
-go install -v github.com/tomnomnom/httprobe@latest
+export PATH=$PATH:$(go env GOPATH)/bin
 ```
 
-### Add Go tools to PATH
+Make it permanent:
 
 ```bash
-export PATH=$PATH:~/go/bin
+echo 'export PATH=$PATH:$(go env GOPATH)/bin' >> ~/.bashrc
+
+source ~/.bashrc
 ```
 
 ---
 
-## 📥 Installation
+# ▶️ Usage
 
-Clone the repository:
-
-```bash
-git clone https://github.com/your-username/SubMerge-Subdomain-Finder-Tool.git
-cd SubMerge-Subdomain-Finder-Tool
-```
-
-Make the script executable:
-
-```bash
-chmod +x submerge.sh
-```
-
-Ensure `resolvers.txt` is present in the same directory.
-
----
-
-## ▶️ Usage
-
-### Basic scan
+## Basic Scan
 
 ```bash
 ./submerge.sh example.com
 ```
 
-### Example
+---
+
+## Example
 
 ```bash
 ./submerge.sh tesla.com
@@ -151,47 +201,115 @@ Ensure `resolvers.txt` is present in the same directory.
 
 ---
 
-## 📤 Output Files
+# 📤 Output Structure
 
-After completion, results will be stored in:
-
+```text
+output/example.com/
+├── raw/
+└── final/
 ```
+
+---
+
+## Final Results
+
+```text
 output/example.com/final/
-├── resolved.txt   → All valid resolved subdomains  
-└── alive.txt      → Only live HTTP/HTTPS hosts  
+├── resolved.txt
+└── alive.txt
 ```
 
 ---
 
-## 🧠 What SubMerge v1.0 is good for
+## resolved.txt
 
-* Bug bounty recon
-* Learning recon workflows
-* Automation practice
-* Medium-sized scopes
+Contains all valid resolved subdomains.
 
----
+Example:
 
-## 🔮 Roadmap – SubMerge v2.0 (Planned)
-
-In the next version, we plan to add many more features, and made this tool more efficient.
-
----
-
-## ⭐ Contribute
-
-Feel free to:
-
-* Open issues
-* Suggest features
-* Submit pull requests
+```text
+api.example.com
+dev.example.com
+admin.example.com
+```
 
 ---
 
-## 👤 Author
+## alive.txt
+
+Contains live HTTP/HTTPS hosts with status codes.
+
+Example:
+
+```text
+https://api.example.com [200]
+https://admin.example.com [403]
+https://dev.example.com [302]
+```
+
+---
+
+# 🧠 What SubMerge Is Good For
+
+- Bug bounty reconnaissance
+- Subdomain enumeration
+- Recon workflow learning
+- Bash scripting practice
+- Medium and large scopes
+- Automation learning
+
+---
+
+# ⚡ Current Features
+
+✅ Parallel enumeration  
+✅ Safe Bash scripting  
+✅ Chunked MassDNS execution  
+✅ HTTP status code detection  
+✅ Organized outputs  
+✅ Dependency checking  
+
+---
+
+# 🔮 Planned Features (v2.0)
+
+- Nuclei integration
+- Screenshot support
+- Technology detection
+- Resume mode
+- ASN mapping
+- Docker support
+- JSON output
+- Config file support
+- Wordlist support
+
+---
+
+# 🤝 Contributing
+
+Contributions are welcome.
+
+You can:
+- Open issues
+- Suggest features
+- Submit pull requests
+
+---
+
+# 👤 Author
 
 **Umang Mishra**
+
 Cyber Security Student | Bug Bounty Enthusiast
 
 ---
 
+# ⭐ Disclaimer
+
+This project is made for:
+
+- Educational purposes
+- Authorized penetration testing
+- Bug bounty reconnaissance
+
+Do NOT use against targets without permission.

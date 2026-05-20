@@ -8,6 +8,6 @@ dnsgen
 
 massdns
 
-httprobe
+httpx
 
 export PATH=$PATH:~/go/bin
