@@ -107,7 +107,7 @@ main() {
   pids=()
 
   log "amass..."
-  amass enum -passive -d "$DOMAIN" -o "$RAW/amass.txt" &
+  { amass enum -passive -d "$DOMAIN" > "$RAW/amass.txt"; } &
   pids+=($!)
 
   log "subfinder..."
@@ -148,10 +148,14 @@ main() {
   if [[ -s "$RAW/all_initial.txt" ]]; then
     log "Running dnsgen (limited)..."
     dnsgen "$RAW/all_initial.txt" \
-      | sed 's/\r$//' \
-      | awk 'NF' \
-      | sort -u \
-      | head -n "$DNSGEN_LIMIT" > "$RAW/dnsgen.txt"
+    | sed 's/\r$//' \
+    | awk 'NF' \
+    | sort -u \
+    | awk -v limit="$DNSGEN_LIMIT" 'NR<=limit' > "$RAW/dnsgen.txt"
+
+  if [[ ! -s "$RAW/dnsgen.txt" ]]; then
+    warn "dnsgen produced no output"
+  fi
 
     cat "$RAW/all_initial.txt" "$RAW/dnsgen.txt" \
       | sed 's/\r$//' \
