@@ -1,25 +1,42 @@
 #!/usr/bin/env bash
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 set -Eeuo pipefail
 IFS=$'\n\t'
 shopt -s nullglob
 
-# =========================
-# SubMerge - Refined Recon Tool
+# ========================
+# SubMerge - Unified Recon Framework
 # Author: Umang Mishra
-# Version: 1.3
+# Version: 2.0
 # Legal: Use only on targets you own or have permission to test.
 # =========================
 
 SCRIPT_NAME="$(basename "$0")"
 
-DOMAIN="${1:-}"
-OUTPUT_ROOT="${OUTPUT_ROOT:-output}"
-RESOLVERS_FILE="${RESOLVERS_FILE:-resolvers.txt}"
-CHUNK_SIZE="${CHUNK_SIZE:-500000}"
-DNSGEN_LIMIT="${DNSGEN_LIMIT:-200000}"
-KEEP_TEMP="${KEEP_TEMP:-0}"
+DOMAIN=""
+OUTPUT_ROOT="."
+RESOLVERS_FILE="$SCRIPT_DIR/resolvers.txt"
 
-print_banner() {
+DEEP_MODE=0
+CHUNK_SIZE=50000
+DNSGEN_LIMIT=5000
+MASSDNS_CONCURRENCY=50
+ENUM_TIMEOUT="15m"
+KEEP_TEMP=0
+
+RED=$'\033[0;31m'
+GREEN=$'\033[0;32m'
+YELLOW=$'\033[1;33m'
+BLUE=$'\033[0;34m'
+CYAN=$'\033[0;36m'
+NC=$'\033[0m'
+
+info() { printf '%b[*]%b %s\n' "$BLUE" "$NC" "$*"; }
+ok()   { printf '%b[+]%b %s\n' "$GREEN" "$NC" "$*"; }
+warn() { printf '%b[!]%b %s\n' "$YELLOW" "$NC" "$*" >&2; }
+fail() { printf '%b[x]%b %s\n' "$RED" "$NC" "$*" >&2; exit 1; }
+
+banner() {
 cat <<'EOF'
 
    ███████╗██╗   ██╗██████╗ ███╗   ███╗███████╗██████╗  ██████╗ ███████╗
@@ -30,7 +47,7 @@ cat <<'EOF'
    ╚══════╝ ╚═════╝ ╚═════╝ ╚═╝     ╚═╝╚══════╝╚═╝  ╚═╝ ╚═════╝ ╚══════╝
 
         SubMerge - Unified Recon Framework
-                  Version 1.3
+                  Version 2.0
                   Author: Umang Mishra
 
    [!] Legal: Use only on targets you own or have permission to test!
@@ -39,62 +56,190 @@ EOF
 
 usage() {
   cat <<EOF
-Usage: $SCRIPT_NAME example.com
+Usage:
+  $SCRIPT_NAME example.com
+  $SCRIPT_NAME example.com --deep
+  $SCRIPT_NAME example.com --deep --dnsgen-limit 10000 --massdns-concurrency 50
 
-Environment variables:
-  OUTPUT_ROOT=output
-  RESOLVERS_FILE=resolvers.txt
-  CHUNK_SIZE=500000
-  DNSGEN_LIMIT=200000
-  KEEP_TEMP=0
+Options:
+  --deep                      Enable dnsgen + massdns pipeline
+  --output, -o DIR            Output directory (default: current directory)
+  --resolvers FILE            Resolver list (default: resolvers.txt)
+  --chunk-size N              Lines per massdns chunk (default: 50000)
+  --dnsgen-limit N            Max permutations (default: 5000)
+  --massdns-concurrency N     MassDNS concurrency (default: 50)
+  --timeout DURATION           Enum timeout like 10m, 15m (default: 15m)
+  --keep-temp                 Keep temp files
+  -h, --help                  Show help
 EOF
 }
 
-log()  { printf '[*] %s\n' "$*"; }
-ok()   { printf '[+] %s\n' "$*"; }
-warn() { printf '[!] %s\n' "$*" >&2; }
-die()  { printf '[x] %s\n' "$*" >&2; exit 1; }
+have() {
+  command -v "$1" >/dev/null 2>&1
+}
 
-require_cmds() {
+require_cmds_fast() {
   local missing=()
-  local cmds=(amass subfinder assetfinder findomain dnsgen massdns httpx sort awk sed wc head split cat grep)
+  local cmds=(amass subfinder assetfinder findomain httpx sort awk sed wc cat grep tee timeout)
 
   for c in "${cmds[@]}"; do
-    command -v "$c" >/dev/null 2>&1 || missing+=("$c")
+    have "$c" || missing+=("$c")
   done
 
   if ((${#missing[@]} > 0)); then
-    die "Missing required tools: ${missing[*]}"
+    fail "Missing required tools: ${missing[*]}"
+  fi
+}
+
+require_cmds_deep() {
+  local missing=()
+  local cmds=(dnsgen massdns split)
+
+  for c in "${cmds[@]}"; do
+    have "$c" || missing+=("$c")
+  done
+
+  if ((${#missing[@]} > 0)); then
+    fail "Missing deep-mode tools: ${missing[*]}"
   fi
 }
 
 validate_domain() {
-  [[ -n "$DOMAIN" ]] || { usage; exit 1; }
-  [[ "$DOMAIN" =~ ^([A-Za-z0-9-]+\.)+[A-Za-z]{2,}$ ]] || die "Invalid domain: $DOMAIN"
+  [[ -n "$DOMAIN" ]] || fail "No domain provided"
+  [[ "$DOMAIN" =~ ^([A-Za-z0-9-]+\.)+[A-Za-z]{2,}$ ]] || fail "Invalid domain: $DOMAIN"
 }
+
+BASE=""
+RAW=""
+FINAL=""
+TMP_DIR=""
+LOG_FILE=""
 
 cleanup() {
-  if [[ "$KEEP_TEMP" -eq 0 && -n "${RAW:-}" ]]; then
-    rm -f "$RAW"/chunk_* 2>/dev/null || true
+  if [[ "$KEEP_TEMP" -eq 0 ]]; then
+    [[ -n "${TMP_DIR:-}" && -d "$TMP_DIR" ]] && rm -rf "$TMP_DIR" 2>/dev/null || true
+    [[ -n "${RAW:-}" ]] && rm -f "$RAW"/chunk_* 2>/dev/null || true
   fi
 }
-
 trap cleanup EXIT
 
-main() {
-  print_banner
-  validate_domain
-  require_cmds
+parse_args() {
+  if [[ $# -lt 1 ]]; then
+    usage
+    exit 1
+  fi
 
-  BASE="$OUTPUT_ROOT/$DOMAIN"
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --deep)
+        DEEP_MODE=1
+        shift
+        ;;
+      --output|-o)
+        OUTPUT_ROOT="${2:-}"
+        [[ -n "${OUTPUT_ROOT:-}" ]] || fail "--output needs a value"
+        shift 2
+        ;;
+      --resolvers)
+        RESOLVERS_FILE="${2:-}"
+        [[ -n "${RESOLVERS_FILE:-}" ]] || fail "--resolvers needs a value"
+        shift 2
+        ;;
+      --chunk-size)
+        CHUNK_SIZE="${2:-}"
+        [[ -n "${CHUNK_SIZE:-}" ]] || fail "--chunk-size needs a value"
+        shift 2
+        ;;
+      --dnsgen-limit)
+        DNSGEN_LIMIT="${2:-}"
+        [[ -n "${DNSGEN_LIMIT:-}" ]] || fail "--dnsgen-limit needs a value"
+        shift 2
+        ;;
+      --massdns-concurrency)
+        MASSDNS_CONCURRENCY="${2:-}"
+        [[ -n "${MASSDNS_CONCURRENCY:-}" ]] || fail "--massdns-concurrency needs a value"
+        shift 2
+        ;;
+      --timeout)
+        ENUM_TIMEOUT="${2:-}"
+        [[ -n "${ENUM_TIMEOUT:-}" ]] || fail "--timeout needs a value"
+        shift 2
+        ;;
+      --keep-temp)
+        KEEP_TEMP=1
+        shift
+        ;;
+      -h|--help)
+        usage
+        exit 0
+        ;;
+      *)
+        if [[ -z "$DOMAIN" ]]; then
+          DOMAIN="$1"
+          shift
+        else
+          fail "Unknown argument: $1"
+        fi
+        ;;
+    esac
+  done
+}
+
+start_job() {
+  local label="$1"
+  shift
+  info "$label..."
+  "$@" &
+  pids+=("$!")
+}
+
+run_amass() {
+  timeout "$ENUM_TIMEOUT" amass enum -passive -d "$DOMAIN" > "$RAW/amass.txt" 2>>"$LOG_FILE" || true
+}
+
+run_subfinder() {
+  timeout "$ENUM_TIMEOUT" subfinder -d "$DOMAIN" -silent -o "$RAW/subfinder.txt" 2>>"$LOG_FILE" || true
+}
+
+run_assetfinder() {
+  timeout "$ENUM_TIMEOUT" assetfinder --subs-only "$DOMAIN" > "$RAW/assetfinder.txt" 2>>"$LOG_FILE" || true
+}
+
+run_findomain() {
+  timeout "$ENUM_TIMEOUT" findomain -t "$DOMAIN" -q > "$RAW/findomain.txt" 2>>"$LOG_FILE" || true
+}
+
+main() {
+  parse_args "$@"
+  banner
+  validate_domain
+  require_cmds_fast
+  [[ "$DEEP_MODE" -eq 1 ]] && require_cmds_deep
+
+  if [[ "$DEEP_MODE" -eq 1 ]]; then
+      ENUM_TIMEOUT="10m"
+  else
+      ENUM_TIMEOUT="3m"
+  fi
+
+  if [[ "$OUTPUT_ROOT" = "." ]]; then
+      OUTPUT_ROOT="$(pwd)"
+  fi
+
+  BASE="${OUTPUT_ROOT%/}/$DOMAIN"
   RAW="$BASE/raw"
   FINAL="$BASE/final"
+  TMP_DIR="$(mktemp -d)"
+  LOG_FILE="$BASE/run.log"
 
   mkdir -p "$RAW" "$FINAL"
-  chmod -R 755 "$OUTPUT_ROOT" || true
+  : > "$LOG_FILE"
 
-  log "Target: $DOMAIN"
-  log "Output: $BASE"
+  exec > >(tee -a "$LOG_FILE") 2>&1
+
+  info "Target: $DOMAIN"
+  info "Output: $BASE"
+  [[ "$DEEP_MODE" -eq 1 ]] && info "Mode: deep" || info "Mode: fast"
 
   : > "$RAW/amass.txt"
   : > "$RAW/subfinder.txt"
@@ -106,33 +251,20 @@ main() {
 
   pids=()
 
-  log "amass..."
-  { amass enum -passive -d "$DOMAIN" > "$RAW/amass.txt"; } &
-  pids+=($!)
-
-  log "subfinder..."
-  subfinder -d "$DOMAIN" -silent -o "$RAW/subfinder.txt" &
-  pids+=($!)
-
-  log "assetfinder..."
-  { assetfinder --subs-only "$DOMAIN" > "$RAW/assetfinder.txt"; } &
-  pids+=($!)
-
-  log "findomain..."
-  { findomain -t "$DOMAIN" -q > "$RAW/findomain.txt"; } &
-  pids+=($!)
+  start_job "amass" run_amass
+  start_job "subfinder" run_subfinder
+  start_job "assetfinder" run_assetfinder
+  start_job "findomain" run_findomain
 
   failed=0
   for pid in "${pids[@]}"; do
     if ! wait "$pid"; then
       failed=1
-      warn "One enumeration job failed"
+      warn "One enumeration job failed or timed out"
     fi
   done
 
-  if [[ "$failed" -eq 1 ]]; then
-    warn "Continuing with whatever output was collected"
-  fi
+  [[ "$failed" -eq 1 ]] && warn "Continuing with whatever output was collected"
 
   cat "$RAW"/amass.txt \
       "$RAW"/subfinder.txt \
@@ -143,72 +275,107 @@ main() {
     | sort -u > "$RAW/all_initial.txt"
 
   COUNT_INIT="$(wc -l < "$RAW/all_initial.txt" | tr -d ' ')"
-  ok "Initial unique subdomains: $COUNT_INIT"
+  ok "Subdomains found: $COUNT_INIT"
 
-  if [[ -s "$RAW/all_initial.txt" ]]; then
-    log "Running dnsgen (limited)..."
-    dnsgen "$RAW/all_initial.txt" \
-    | sed 's/\r$//' \
-    | awk 'NF' \
-    | sort -u \
-    | awk -v limit="$DNSGEN_LIMIT" 'NR<=limit' > "$RAW/dnsgen.txt"
-
-  if [[ ! -s "$RAW/dnsgen.txt" ]]; then
-    warn "dnsgen produced no output"
+  if [[ "$COUNT_INIT" -eq 0 ]]; then
+    fail "No passive subdomains found. Check connectivity, tool setup, or target scope."
   fi
 
-    cat "$RAW/all_initial.txt" "$RAW/dnsgen.txt" \
+  HTTPX_INPUT="$RAW/all_initial.txt"
+
+  if [[ "$DEEP_MODE" -eq 1 ]]; then
+    ENUM_TIMEOUT="15m"
+
+    info "Running dnsgen..."
+    dnsgen "$RAW/all_initial.txt" \
       | sed 's/\r$//' \
       | awk 'NF' \
-      | sort -u > "$RAW/all_with_perms.txt"
-  else
-    : > "$RAW/all_with_perms.txt"
-    warn "No initial subdomains found; skipping dnsgen"
+      | sort -u \
+      | awk -v limit="$DNSGEN_LIMIT" 'NR<=limit' > "$RAW/dnsgen.txt" 2>>"$LOG_FILE" || true
+
+    if [[ -s "$RAW/dnsgen.txt" ]]; then
+      cat "$RAW/all_initial.txt" "$RAW/dnsgen.txt" \
+        | sed 's/\r$//' \
+        | awk 'NF' \
+        | sort -u > "$RAW/all_final.txt"
+    else
+      cp "$RAW/all_initial.txt" "$RAW/all_final.txt"
+      warn "dnsgen produced no output; using passive results only"
+    fi
+
+    COUNT_FINAL="$(wc -l < "$RAW/all_final.txt" | tr -d ' ')"
+    ok "Total after permutations: $COUNT_FINAL"
+
+    if [[ -f "$RESOLVERS_FILE" && -s "$RESOLVERS_FILE" ]]; then
+      grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' "$RESOLVERS_FILE" \
+        | sort -u > "$TMP_DIR/resolvers.clean.txt"
+
+      if [[ -s "$TMP_DIR/resolvers.clean.txt" ]]; then
+        info "Resolving subdomains..."
+        split -l "$CHUNK_SIZE" "$RAW/all_final.txt" "$TMP_DIR/chunk_"
+
+        : > "$RAW/massdns.txt"
+        for chunk in "$TMP_DIR"/chunk_*; do
+          [[ -s "$chunk" ]] || continue
+          massdns \
+            -r "$TMP_DIR/resolvers.clean.txt" \
+            -t A \
+            -o S \
+            -s "$MASSDNS_CONCURRENCY" \
+            "$chunk" \
+            >> "$RAW/massdns.txt" 2>>"$LOG_FILE" || warn "massdns failed for $chunk"
+        done
+
+        awk '$2=="A" { gsub(/\.$/, "", $1); print $1 }' "$RAW/massdns.txt" \
+          | sort -u > "$FINAL/resolved.txt"
+
+        if [[ -s "$FINAL/resolved.txt" ]]; then
+          HTTPX_INPUT="$FINAL/resolved.txt"
+        else
+          warn "MassDNS produced no resolved hosts; falling back to dnsgen/passive list for httpx"
+          HTTPX_INPUT="$RAW/all_final.txt"
+        fi
+      else
+        warn "No valid resolvers found in $RESOLVERS_FILE; skipping massdns"
+        HTTPX_INPUT="$RAW/all_final.txt"
+      fi
+    else
+      warn "Resolvers file missing or empty; skipping massdns"
+      HTTPX_INPUT="$RAW/all_final.txt"
+    fi
   fi
 
-  COUNT_PERM="$(wc -l < "$RAW/all_with_perms.txt" | tr -d ' ')"
-  ok "After dnsgen (limited): $COUNT_PERM"
-
-  if [[ ! -s "$RAW/all_with_perms.txt" ]]; then
-    die "No domains to resolve."
+  if [[ "$DEEP_MODE" -eq 0 ]]; then
+    cp "$RAW/all_initial.txt" "$RAW/all_final.txt"
   fi
 
-  [[ -f "$RESOLVERS_FILE" && -s "$RESOLVERS_FILE" ]] || die "Resolvers file not found or empty: $RESOLVERS_FILE"
-
-  log "Running massdns (chunked)..."
-  split -l "$CHUNK_SIZE" "$RAW/all_with_perms.txt" "$RAW/chunk_"
-
-  > "$RAW/massdns.txt"
-  for chunk in "$RAW"/chunk_*; do
-    [[ -s "$chunk" ]] || continue
-    massdns -r "$RESOLVERS_FILE" -t A -o S "$chunk" >> "$RAW/massdns.txt" || warn "massdns failed for $chunk"
-  done
-
-  if [[ "$KEEP_TEMP" -eq 0 ]]; then
-    rm -f "$RAW"/chunk_* 2>/dev/null || true
-  fi
-
-  awk '$2=="A" { gsub(/\.$/, "", $1); print $1 }' "$RAW/massdns.txt" \
-    | sort -u > "$FINAL/resolved.txt"
-
-  COUNT_RES="$(wc -l < "$FINAL/resolved.txt" | tr -d ' ')"
-  ok "Resolved subdomains: $COUNT_RES"
-
-  if [[ -s "$FINAL/resolved.txt" ]]; then
-    log "Running httpx..."
-    httpx -silent \
-      -l "$FINAL/resolved.txt" \
-      -status-code \
-      > "$FINAL/alive.txt" || warn "httpx returned an error"
-  fi
+  info "Checking live hosts..."
+  httpx -silent \
+    -l "$HTTPX_INPUT" \
+    -status-code \
+    > "$FINAL/alive.txt" 2>>"$LOG_FILE" || warn "httpx returned an error"
 
   COUNT_ALIVE="$(wc -l < "$FINAL/alive.txt" | tr -d ' ')"
+  ok "Alive hosts: $COUNT_ALIVE"
 
+  if [[ "$DEEP_MODE" -eq 0 ]]; then
+    warn "Fast mode skips dnsgen and massdns. resolved.txt will remain empty."
+  fi
+
+  echo
   echo "======================================"
-  ok "Total Resolved: $COUNT_RES"
-  ok "Alive Hosts:    $COUNT_ALIVE"
-  ok "Resolved File:   $FINAL/resolved.txt"
-  ok "Alive File:      $FINAL/alive.txt"
+  ok "Scan Completed Successfully"
+  echo
+  info "Output Directory : $BASE"
+  info "Raw Results      : $RAW"
+  info "Final Results    : $FINAL"
+
+  if [[ "$DEEP_MODE" -eq 1 ]]; then
+    info "Resolved Hosts   : $FINAL/resolved.txt"
+  fi
+
+  info "Alive Hosts      : $FINAL/alive.txt"
+  info "Log File         : $LOG_FILE"
   echo "======================================"
 }
 
